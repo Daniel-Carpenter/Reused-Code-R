@@ -26,12 +26,12 @@ eomonth <- function(x, setToBegOfMonth = FALSE, parseDate = TRUE, ...) {
 
 
 # Examples
-# > eomonth('2020-01-04')
+# eomonth('2020-01-04')
 # [1] "2020-01-31"
 # 
-# > eomonth('2020-01-04', setToBegOfMonth = T)
+# eomonth('2020-01-04', setToBegOfMonth = T)
 # [1] "2020-01-01"
 # 
-# > eomonth('January 2020 04', parseDate = T, format = '%B %Y %d', setToBegOfMonth = T)
+# eomonth('January 2020 04', parseDate = T, format = '%B %Y %d', setToBegOfMonth = T)
 # [1] "2020-01-01"
 
