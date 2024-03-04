@@ -1,3 +1,0 @@
-# OPA Reader credentials
-getUserName <- function() { return("OPA_reader"  ) }
-getPassword <- function() { return("@CMQLm!$vHu5") }
