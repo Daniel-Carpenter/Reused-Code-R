@@ -4,11 +4,18 @@ library(tidyverse)
 # If long format, must define the grouping columns
 
 indexGrowth <- function(df, dateCol, 
-                        groupingCols = NULL # set to a vector of the grouping columns, if in long format
-                        ) {
+                        groupingCols = NULL, # set to a vector of the grouping columns, if in long format
+                        isDateCol = TRUE
+) {
+  
+  if (isDateCol) {
+    idColFun <- as.Date
+  } else(
+    idColFun <- as.factor
+  )
   
   # Ensure date col is a factor, so not grouped
-  df[[dateCol]] <- as.factor(df[[dateCol]])
+  df[[dateCol]] <- idColFun(df[[dateCol]])
   
   df_index <- df |>
     
@@ -17,7 +24,7 @@ indexGrowth <- function(df, dateCol,
     group_by(across(groupingCols)) |> 
     
     # Index each value relative to the first, for each column
-    mutate(across(where(is.numeric), ~(. / first(.))))
+    mutate(across(where(is.numeric), ~(. / first(.)) * 100))
   
   # write.csv(cbind(df, df_index), 'indexCalcs.csv')
   
