@@ -1,0 +1,204 @@
+# Read Commonly Used Library and Reusable Functions
+source('Reused-Code//Read-Data-and-Library.R')
+
+
+
+# INPUTS =======================================================================
+
+highlightedDate = as.Date('2024-01-31')
+bigBusiness = c("WS")
+removeBusinesses = c('PV', 'TX', 'WG', 'AW', 'MG') # WIGOS transfered
+
+minDate = as.Date('2020-06-01')
+maxDate = as.Date('2024-02-01')
+
+
+# DATA =========================================================================
+
+
+## DATABASE CONNECTION =========================================================
+
+# Connect to the database                            # Connection using `dbplyr`:
+con <- tbl(database,                                 # The database
+           in_schema(schema = 'UTILIZATION',         # The schema
+           table  = 'DailyGamingByAssetFullDetail')) # The table
+
+
+
+# DATA PULL ===================================================================
+
+result <- con  |>
+  
+  # Filter the data to date ranges
+  filter(GAMING_DATE >= minDate & GAMING_DATE < maxDate) |> 
+
+  # Drop Unneeded columns
+  select(-c(MANUFACTURER,
+            VENDOR_ID,
+            ZONE_GROUPING,
+            ZONE,
+            BANK,
+            LOCATION,
+            CURRENCY_DENOM,
+            GAME_DESCRIPTION,
+            ASSET_NBR,
+            AVERAGE_BET,
+            NET_HOLD_PERCENT,
+            GROSS_HOLD_PERCENT,
+            GROSS_THEO_HOLD_PERCENT
+            )) |>
+
+  collect()
+
+# write_rds(result, 'Business-Performance/data.rds')
+# result <- read_rds('Business-Performance/data.rds')
+
+
+## DATA PREP ===================================================================
+df <- result |> 
+  
+  # Style
+  rename(FREE_PLAY = FREEPLAY) |> 
+  
+  # remove wigos. Done here since dplyr cannot do IN on sql server 
+  filter(!(SOURCE_PROP %in% removeBusinesses)) |> 
+  
+  # Factor lump the largest businesses
+  mutate(isBigBusiness = SOURCE_PROP %in% bigBusiness,
+         SOURCE_PROP_GROUP = if_else(isBigBusiness, SOURCE_PROP, "All Other Bally's Properties"),
+         SOURCE_PROP_GROUP = if_else(SOURCE_PROP_GROUP == 'WS', 'WinStar', SOURCE_PROP_GROUP),
+         
+         # Add month end data
+         GAMING_MONTH_END = ceiling_date(GAMING_DATE, 'month') - days(1)
+  ) |> 
+         
+  
+  # Group data daily (not asset anymore)
+  group_by(GAMING_DATE,
+           GAMING_MONTH_END,
+           SOURCE_PROP_GROUP,
+           ASSET_CLASS
+           ) |> 
+    
+  # Sum performance metrics to daily
+  summarise(
+    
+    # Raw data
+    COIN_IN       = sum(COIN_IN),
+    FREE_PLAY      = sum(FREE_PLAY),
+    NET_WIN       = sum(NET_WIN),
+    HANDLE_PULLS  = sum(HANDLE_PULLS),
+  ) |> 
+  
+  # Now re-group to get **daily** average
+  group_by(GAMING_MONTH_END,
+           SOURCE_PROP_GROUP,
+           ASSET_CLASS
+           ) |> 
+    
+  # Sum or create performance metrics
+  summarise(
+    
+    # Per day
+    COIN_IN_PER_DAY      = mean(COIN_IN,      na.rm = T),
+    NET_WIN_PER_DAY      = mean(NET_WIN,      na.rm = T),
+    HANDLE_PULLS_PER_DAY = mean(HANDLE_PULLS, na.rm = T),
+    FREE_PLAY_PER_DAY     = mean(FREE_PLAY,     na.rm = T),
+
+    # Ratios
+    AVG_BET         = sum(COIN_IN, na.rm = T) / sum(HANDLE_PULLS, na.rm = T),
+    GROSS_HOLD      = (sum(NET_WIN, na.rm = T) + sum(FREE_PLAY, na.rm = T)) / sum(COIN_IN, na.rm = T),
+    HOLD_WT_AVG_BET = AVG_BET  * GROSS_HOLD
+  ) |> 
+  
+  # Make asset class as a factor
+  mutate(ASSET_CLASS = as.factor(ASSET_CLASS)) |> 
+    
+  # Put values into single column for dynamic plotting
+  pivot_longer(cols = where(is.numeric),
+               names_to = 'metric',
+               values_to = 'value') |> 
+  
+  mutate(metric = str_replace_all(metric, '_', ' '),
+         metric = str_to_title(metric)
+  )
+
+
+
+# PLOTS ========================================================================
+
+millionsOfDollars <- function(x) dollar(x / 1e6, prefix = "$", suffix = " M")
+
+# Filter to select month
+df_plot <- df |> 
+  filter(month(GAMING_MONTH_END) == 1) 
+  
+plot_performance <- df_plot |> 
+  
+  
+  # Map variables to plot
+  ggplot(aes(x = GAMING_MONTH_END, 
+             y = value,
+             color = ASSET_CLASS,
+             fill  = ASSET_CLASS
+             )) +
+  
+  # Add lines
+  geom_line() +
+  geom_point(size = 1.5, 
+             pch = 21, # Type of point that allows us to have both color (border) and fill.
+             color = "white", 
+             stroke = 0.75 # The width of the border, i.e. stroke.
+             ) +
+  
+  
+  # Labels
+  labs(title    = 'Gaming Performance Metrics\n',
+       subtitle = paste('Only showing data occuring in', 
+                        paste(unique(month(df_plot$GAMING_MONTH_END, label = TRUE, abbr = FALSE)), collapse = ', '), '\n'),
+       x        = '\nGaming Month-End Date',
+       y        = '',
+       color    = 'Asset Class',
+       fill     = 'Asset Class',
+       caption  = "\nSource: Bally's Corporation."
+       ) +
+  
+  # Facetting
+  facet_grid(cols = vars(reorder(str_wrap(SOURCE_PROP_GROUP, 15), desc(value))),
+             rows = vars(reorder(str_wrap(metric, 8), value)),
+             scales = 'free_y',
+             switch = "y"
+             ) +
+  
+  # Axis formats
+  scale_y_continuous(labels = comma) +
+  scale_x_date(breaks = c(min(df_plot$GAMING_MONTH_END), max(df_plot$GAMING_MONTH_END)),
+               date_labels = "'%y") +
+  
+  # Theme
+  scale_color_cmac() +
+  scale_fill_cmac(overrideWithAccent = TRUE) +
+  theme_cmac(borderMode = 'facet',
+             inTimesNewRoman = T
+             ) +
+  
+  # Additional theme
+  theme(legend.position = 'top',
+        legend.title = element_text(color = scale_cmac('text')),
+        strip.placement = "outside", # Ensures labels are outside the plot area
+        strip.text.y = element_text(size = 11, hjust = 1, vjust = 1),
+        strip.text.x = element_text(vjust = 1),
+        axis.text.x = element_text(hjust = 1),
+        panel.spacing.y = unit(1.5, "lines")
+        )
+
+# plot_performance # display
+
+
+exportToPNG(cowplot::plot_grid(last_plot()), 
+            outputFileName = 'Business-Performance/Visualizations/Business-Performance',
+            outHeight      = 1000,
+            outWidth       = 650,
+            outResolution  = 100,
+            SCALED_BY      = 10
+)

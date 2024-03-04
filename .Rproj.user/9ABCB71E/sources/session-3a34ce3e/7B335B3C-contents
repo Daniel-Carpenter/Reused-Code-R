@@ -1,0 +1,22 @@
+library(devtools)
+
+# Function to write plots to a certain file extension (PDF, PNG)
+exportToPNG <- function(combinedPlots,
+                        outputFileName,
+                        outWidth      = 1500,
+                        outHeight     = 950,
+                        outResolution = 72,
+                        SCALED_BY     = 2
+                        ) {
+  # Create blank file
+  png(filename = paste0(outputFileName, '.png'),
+      width    =  SCALED_BY       * outWidth,
+      height   =  SCALED_BY       * outHeight,
+      res      = (SCALED_BY + 1.15) * outResolution # Bigger = larger text
+  )
+  
+  # Print the plots
+  print(combinedPlots)
+  
+  dev.off() # write the file
+}

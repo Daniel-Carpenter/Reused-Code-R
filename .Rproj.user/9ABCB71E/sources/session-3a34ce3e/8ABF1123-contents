@@ -1,0 +1,323 @@
+# Read Commonly Used Library and Reusable Functions
+source('Reused-Code//Read-Data-and-Library.R')
+library(janitor)
+
+
+
+# INPUTS =======================================================================
+
+minDate = as.Date('2020-06-02')
+maxDate = as.Date('2024-02-01')
+
+highlightDatesAfter = as.Date('2024-01-01')
+metricStrWrap = 20
+
+selectedMonth = 1
+
+selectedBusinesses = c('CNDC', 215)#, 210)
+
+# Order of groups
+businessOrder = c(
+  'Total Gaming Centers',
+  'Total WinStar World\nCasino and Resort',
+  'All Other Gaming\nFacilities'
+)
+
+
+
+# DATA =========================================================================
+
+## DATA PULL ===================================================================
+
+df_base <- read_csv('Labor/data.csv')
+
+df_businesses <- unique(df_base$business) |> data.frame()
+
+
+## DATA PREP ===================================================================
+
+### TM1 Data Clean -------------------------------------------------------------
+
+df_raw <- df_base |> 
+  
+  # clean names to camel case
+  janitor::clean_names('screaming_snake') |> 
+  
+  rename_with(~ str_replace_all(., pattern = "X|[0-9]", replacement = "")) |> 
+  rename(BENEFIT_401K = '_BENEFITS_K',
+         PAYROLL_TAX = '_PAYROLL_TA'
+         ) |> 
+
+  janitor::clean_names('snake') |> 
+  
+  
+  # separate columns for busines number
+  separate(col = business, into = c("business_num", "business_name"), sep = " - ") |> 
+  
+  mutate(
+    business_name = if_else(is.na(business_name), business_num, business_name),
+    business_num = ifelse(str_detect(business_name, 'Total Gaming'), 'CNDC', 
+                         ifelse(str_detect(business_name, 'WinStar'), 215, business_num)),
+    business_num = as.factor(business_num)
+  ) |> 
+  
+  
+  # Make date
+  mutate(
+    month_num = match(month_num, month.name),
+    calendar_year = if_else(month_num >= 10 & month_num <= 12,
+                            year_num - 1, year_num),
+    month_end_date = ceiling_date(make_date(calendar_year, month_num), 'month') - days(1)
+  ) |> 
+  
+  select(-month_num, -year_num) |> 
+
+  # Filter min max date
+  filter(month_end_date >= minDate, month_end_date < maxDate) |> 
+  
+  mutate(
+    
+    # Create net win
+    net_win = (electronic_coin_in - electronic_coin_out) + free_play,
+    
+    payroll = salaries,
+    
+    payroll_taxes_benefits = rowSums(across(payroll_tax:annual_leave))
+  ) |> 
+  
+  select(month_end_date, 
+         starts_with('business'), 
+         starts_with('payroll'), -payroll_tax,
+         coin_in = electronic_coin_in,
+         free_play,
+         net_win
+         ) |> 
+  
+  mutate(business_group = if_else(business_num %in% selectedBusinesses,
+                                  business_name, 'All Other Gaming Facilities')
+  ) |> 
+  
+  # Summarise by business group
+  group_by(month_end_date, business_group) |> 
+  summarise(across(where(is.numeric), sum)) |> 
+
+  
+  # Remove data with rows that sum to 0
+  rowwise() |> 
+  filter(sum(c_across(where(is.numeric))) != 0) |> 
+  ungroup()
+
+
+
+### Per Performance Metric calculation -----------------------------------------
+
+df_calcs <- df_raw |> 
+  
+  mutate(
+    
+    # Payroll (only) per business metrics
+    payroll_per_coin_in   = payroll / coin_in,
+    payroll_per_net_win   = payroll / net_win,
+    payroll_per_free_play = payroll / free_play,
+    
+    
+    # Fully loaded payroll per business metrics
+    payroll_full_per_coin_in   = payroll_taxes_benefits / coin_in,
+    payroll_full_per_net_win   = payroll_taxes_benefits / net_win,
+    payroll_full_per_free_play = payroll_taxes_benefits / free_play
+    
+  ) |> 
+  
+  select(-c(payroll:net_win)) |> 
+  
+  # pivot wide
+  pivot_wider(names_from = c('business_group'),
+              values_from = where(is.numeric),
+              names_sep = '--'
+  )
+
+
+
+### Growth of Payroll per Performance Metric calculation -----------------------
+
+
+# Get only the numeric data for ease of applying calcs to all cols
+df_numeric <- select(df_calcs, where(is.numeric))
+
+
+# Step 1: Calculate percent change for all columns
+df_numeric <- df_numeric |>
+  mutate(across(everything(), ~(. / lag(.) - 1)))
+
+
+# Step 2: Set the first row to 1 for all columns
+df_numeric[1, ] <- 1
+
+# Step 3: Calculate the cumulative sum for each row
+df_numeric <- df_numeric |>
+  mutate(across(everything(), cumsum))
+
+# Step 4: Multiply all values by 100
+df_numeric <- df_numeric * 100
+
+
+df_numeric[['month_end_date']] = df_calcs[['month_end_date']]
+
+
+# apply median calculation
+df_median <- df_numeric |> 
+  
+  # pivot long
+  pivot_longer(cols = where(is.numeric),
+               names_to = 'id',
+               values_to = 'index') |> 
+
+  separate(col = id, into = c("metric", "business_group"), sep = '--') |> 
+  
+  # drop na and nan  
+  filter(!is.nan(index)) |> 
+  drop_na() |> 
+  
+  pivot_wider(names_from = 'metric',
+              values_from = 'index') |> 
+  
+  # median calculation
+  rowwise() |>   # Operate on each row individually
+  mutate(payroll_per_median = median(c_across(starts_with('payroll_per')), na.rm = TRUE),
+         payroll_full_per_median = median(c_across(starts_with('payroll_full_per')), na.rm = TRUE)
+         ) |> 
+  ungroup()  # Return to operating on the whole dataframe 
+
+
+
+### Index of Growth Payroll per Performance Metric calculation -----------------------
+
+df_index <- df_median |> 
+
+  # pivot long
+  pivot_longer(cols = where(is.numeric),
+               names_to = 'id',
+               values_to = 'index') |> 
+  
+  mutate(id = str_replace_all(id, "_", " "),
+         id = str_to_title(id)) |> 
+  
+  separate(col = 'id', into = c("payroll_type", 'performance_metric'), sep = ' Per ') |> 
+  
+  mutate(description = if_else(performance_metric == 'Median',
+                               performance_metric, 
+                               'Performance Metric'),
+         
+         business_group = str_wrap(business_group, metricStrWrap)
+  ) |> 
+  
+  drop_na() |> 
+  
+  mutate(business_group = factor(business_group, levels = businessOrder)) |> 
+  
+  mutate(payroll_type = ifelse(payroll_type == "Payroll Full", "Taxes and Benefits", payroll_type))
+
+
+
+
+# PLOTS ========================================================================
+
+legendTitle = ''
+
+colBlue = scale_cmac('blue', 'blue2')
+colGray = scale_cmac('gray', 'gray6')
+labelSize = 3.25
+
+# Filter the last point of each line for labeling
+last_points <- df_index %>%
+  group_by(performance_metric) %>%
+  filter(month_end_date == max(month_end_date)) %>%
+  ungroup()
+
+# Filter the last point for the 'Median' line
+median_last_point <- last_points %>%
+  filter(performance_metric == 'Median')
+
+
+
+# Map variables to plot
+df_index |> 
+  ggplot(
+    aes(x = month_end_date,
+        y = index,
+        group = performance_metric
+        )
+  ) +
+  
+  # intercept
+  geom_hline(yintercept = 100, color = scale_cmac("gray", 'gray5')) + 
+  
+  geom_line(color = colGray) +
+  geom_line(data = df_index |> filter(performance_metric == 'Median'),
+            color = colBlue,
+            size = 1) +
+  
+  # Add labels for non-median lines
+  geom_text(data = last_points %>% filter(performance_metric != 'Median'),
+            aes(label = performance_metric), hjust = -0.1, vjust = 0,
+            color = colGray,
+            family = 'Times',
+            size = labelSize) +
+  
+  # Add label for the 'Median' line
+  geom_text(data = median_last_point,
+            aes(label = paste0('Median: ', round(index, 0))), hjust = -0.1, vjust = 0, color = colBlue,
+            size = labelSize, , fontface = "bold",
+            family = 'Times'
+            ) +
+
+  # Labels
+  labs(title    = 'Growth of Labor relative to Growth in Gaming Performance\n',
+       subtitle = paste('Index = 100 at', format(min(df_index$month_end_date), '%B %Y'),                    '\n'),
+       x        = '',
+       y        = '',
+       color    = legendTitle,
+       fill     = legendTitle,
+       caption = paste('\nSource TM1 Financial Information | Chickasaw Nation. Total Gaming Centers w/Adjustments.',
+                       '\n*"Total Gaming Centers" includes WinStar and "Other Gaming Facilities."'
+                       )
+       ) +
+
+  # Facetting
+  facet_grid(cols = vars(payroll_type),
+             rows = vars(business_group),
+             # scales = 'free_y',
+             switch = "y"
+             ) +
+
+  # Axis formats
+  scale_y_continuous(labels = comma) +
+
+  # Theme
+  theme_cmac(borderMode = 'facet',
+             inTimesNewRoman = T) + 
+
+  # # Additional theme
+  expand_limits(x = max(df_index$month_end_date) + 230) +  # Adjust the number of days added according to your date range and requirements
+  
+  
+  theme(legend.position = 'top',
+        legend.title = element_text(color = scale_cmac('text')),
+        strip.placement = "outside", # Ensures labels are outside the plot area
+        strip.text.x = element_text(size = 13, vjust = 1),
+        # axis.text.x = element_text(hjust = 1),
+        panel.spacing.x = unit(1.25, "lines"),
+        panel.spacing.y = unit(1, "lines"),
+        axis.title.y = element_text(size = 9)
+        )
+
+
+
+exportToPNG(cowplot::plot_grid(last_plot()), 
+            outputFileName = 'Labor/Visualizations/Labor-vs-Performance',
+            outHeight = 1300,
+            outWidth = 1500,
+            outResolution = 115,
+            SCALED_BY = 4
+)
+

@@ -1,0 +1,17 @@
+---
+title: T-Test Results of Net Win per $1 of Freeplay Change
+format: 
+  html:
+    mainfont: Times New Roman
+---
+
+| Metric                  | Value                                        |
+|-------------------------|----------------------------------------------|
+| **Test Type**           | Welch Two Sample t-test                      |
+| **Data**                | **Current TTM vs. Prior TTM**                    |
+| **t-value**             | -10.015 ***(Statistically Significant)***    |
+| **Degrees of Freedom**  | 99.278                                       |
+| **p-value**             | \< 2.2e-16 ***(Statistically Significant)*** |
+| **Confidence Interval** | -1.909436 to -1.277958 *(95%)*               |
+| **Mean of Current TTM** | \$7.184 Net Win per \$1 of Freeplay          |
+| **Mean of Prior TTM**   | \$8.778 Net Win per \$1 of Freeplay          |

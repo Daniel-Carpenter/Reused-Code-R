@@ -1,0 +1,272 @@
+# Read Commonly Used Library and Reusable Functions
+source('Reused-Code//Read-Data-and-Library.R')
+library(zoo)
+
+
+
+# inputs -----------------------------------------------------------------------
+
+# FY 24 start through Jan 24
+startDate = as.Date('2010-01-01')
+endDate   = as.Date('2024-02-01')
+
+# accounts <- c(7200,
+#               7230,
+#               7300,
+#               7305,
+#               7325,
+#               7640,
+#               7700
+#               )
+
+# DATA =========================================================================
+
+gcpe_base <- read_csv('Marketing/GPCE_Marketing_Expenses.csv')
+
+
+
+## DATABASE CONNECTION =========================================================
+
+marketingConfig <- tbl(database,                            # The database
+                       in_schema(schema = 'DASH',           # The schema
+                                 table  = 'GL_EXPENSE_CONFIG')) |>  # The table
+  collect() 
+# marketingConfig[marketingConfig == '0X0!OTHER'] <- NA
+
+# Expense category tables to keep
+expenseCategories    <- tbl(database,                            # The database
+                            in_schema(schema = 'DASH',           # The schema
+                                      table  = 'GL_EXPENSE_CATEGORY_DIM')) |>  # The table
+  collect()
+expenseSubCategories    <- tbl(database,                            # The database
+                               in_schema(schema = 'DASH',           # The schema
+                                         table  = 'GL_EXPENSE_SUBCATEGORY_DIM')) |>  # The table
+  collect()
+
+# Payroll and departments to keep
+payrollConfig    <- tbl(database,                            # The database
+                        in_schema(schema = 'DASH',           # The schema
+                                  table  = 'GL_EXPENSE_MARKETING_PAYROLL_CONFIG_BUSINESS_DEPT')) |>  # The table
+  collect()
+
+payrollAccountConfig <- tbl(database,                            # The database
+                            in_schema(schema = 'DASH',           # The schema
+                                      table  = 'GL_EXPENSE_MARKETING_PAYROLL_CONFIG_ACCOUNT')) |>  # The table
+  collect()
+
+# Source prop names
+sourcePropNames <- tbl(database,                            # The database
+                       in_schema(schema = 'DASH',           # The schema
+                                 table  = 'GL_EXPENSE_BUSINESS_SOURCE_PROP_DIM')) |>  # The table
+  collect()
+
+
+# Filter data
+gcpe_filtered <- gcpe_base |> 
+  mutate(TRX_DATE = as.Date(trimws(TRX_DATE), format = "%m/%d/%Y")) |>
+  filter(TRX_DATE >= startDate & TRX_DATE < endDate) |> 
+  filter(ACCOUNT %in% unique(marketingConfig$ACCOUNT)) |> 
+  
+  
+  # Update database name
+  mutate(DBASE_NAME = if_else(DBASE_NAME == 'ASP' | DBASE_NAME == 'CNCP', 
+                              'Other',
+                              'CNDC')
+  )
+
+
+
+# Matching ---------------------------------------------------------------------
+
+vendorIDs <- list(
+  'LDWW'                = 'LDWW',
+  'LDWW'                = 'LWDD',
+  'Ackerman McQueen'    = 'ACKE',
+  # 'Romph & Pou'         = 'GREM',
+  # 'Romph & Pou'         = 'ROM1',
+  'Koch Comm.' = 'KOC1',
+  'Koch Comm.' = 'KOCH'
+)
+df_vendorIDs <- stack(vendorIDs)
+df_vendorIDs
+
+vendorEvolution <- gcpe_filtered |> 
+  mutate(VENDORID_FUZZY = str_sub(VENDORID, 1, 4)) |> 
+  inner_join(df_vendorIDs, by = c('VENDORID_FUZZY' = 'values')) |> 
+  group_by(MONTH_END_DATE = ceiling_date(TRX_DATE, 'month') - days(1),
+           VENDOR = ind) |> 
+  summarise(EXPENSE = sum(NET_CHANGE)) |> 
+
+    # wide 
+  pivot_wider(names_from = VENDOR,
+              values_from = EXPENSE) |>
+  arrange(MONTH_END_DATE)
+
+
+oldCols = 2:(ncol(vendorEvolution))
+for (colNum in oldCols) {
+  
+  newColName = paste0(colnames(vendorEvolution)[colNum], ' TTM')
+  
+  vendorEvolution[[newColName]] <- zoo::rollapply(vendorEvolution[, colNum], 12, sum, na.rm = TRUE, fill = NA, align = 'right')
+  
+}
+
+vendorEvolutionTTM <- vendorEvolution |> 
+  select(-c(oldCols)) |> 
+  pivot_longer(cols = where(is.numeric),
+               names_to = 'VENDOR',
+               values_to = 'EXPENSE') |> 
+  
+  
+  mutate(VENDOR = factor(VENDOR,
+                         levels = c('Ackerman McQueen TTM',
+                                    'LDWW TTM',
+                                    'Koch Comm. TTM'
+                         ))) |> 
+  drop_na() |> 
+  filter(EXPENSE > 0)
+
+
+# vendorEvolution |> distinct(VENDORID)
+
+# Identify the last points for each VENDOR_GROUPING
+last_points <- vendorEvolutionTTM |>
+  group_by(VENDOR) |>
+  slice(which.max(MONTH_END_DATE)) |>
+  ungroup()
+
+
+vendorEvolutionTTM |> 
+  ggplot(aes(x = MONTH_END_DATE,
+             y = EXPENSE,
+             fill = VENDOR,
+             color = VENDOR,
+             group = VENDOR)) +
+  geom_line(linewidth = 1) +
+  # Vendor **Labels colored**
+  geom_text(data = last_points, 
+            aes(label = paste0(VENDOR, '\n', comma(EXPENSE/1000000), ' M')), 
+            hjust = 0, vjust = 0.25,
+            nudge_x = 20, 
+            # nudge_x = -500,
+            fontface = 'bold',
+            size = 3.5,
+            family = 'Times'
+  ) +
+  
+  # Labels
+  labs(title    = 'Growth of Advertising Expenditures\n',
+       subtitle = 'Showing Trailing Twelve Month (TTM) Historical Expenses\n',
+       x        = '\nMonth-End Date',
+       y        = 'Trailing Twelve Month\n(TTM) Expense\n',
+       caption  = paste0('\nSource: Great Plains Vendor Detail.\nGL Accounts included: ', 
+                         paste(sort(unique(gcpe_filtered$ACCOUNT)), collapse = ', '), '.')
+  ) +  
+  scale_y_continuous(label = millionsOfDollars) + 
+  scale_fill_cmac(overrideWithAccent = T) +
+  scale_color_cmac() +
+  theme_cmac(inTimesNewRoman = T) +
+  theme(legend.position = 'none') +
+  expand_limits(x = max(vendorEvolutionTTM$MONTH_END_DATE) + 400,
+                y = max(vendorEvolutionTTM$EXPENSE) + 5000000,
+                )  # Adjust the number of days added according to your date range and requirements
+
+exportToPNG(cowplot::plot_grid(last_plot()), 
+       outputFileName = 'Marketing/Visualizations/Vendor-Growth',
+       outHeight = 1000,
+       outWidth = 1600,
+       outResolution = 160,
+       SCALED_BY = 8
+)
+
+
+
+# out <- vendorEvolution |> 
+#   select(-c(`Ackerman McQueen TTM`:`LDWW TTM`)) |> 
+#   pivot_longer(cols = where(is.numeric),
+#                names_to = 'VENDOR',
+#                values_to = 'EXPENSE'
+#                ) |> 
+#   write.csv('Marketing/Data-Output/Visualizations/Vendors.csv', row.names = F, na = '')
+
+
+# Pre-calculate the maximum date and the 13th largest date
+max_date <- max(vendorEvolutionTTM$MONTH_END_DATE)
+prior_year_date <- ceiling_date(max_date - days(12*31), 'month') - days(1)
+
+# Filter rows where MONTH_END_DATE matches either max_date or thirteenth_largest_date
+vendorPercentChange <- vendorEvolutionTTM |> 
+  filter(MONTH_END_DATE == max_date | MONTH_END_DATE == prior_year_date) |> 
+  pivot_wider(names_from = VENDOR,
+              values_from = EXPENSE
+              ) |> 
+  ungroup() |> 
+  mutate(across(where(is.numeric), ~ . / lag(.) - 1)) |> 
+  drop_na() |> 
+  pivot_longer(cols = where(is.numeric),
+               names_to = 'VENDOR',
+               values_to = 'EXPENSE'
+  ) |> 
+  mutate(VENDOR = str_replace_all(VENDOR, 'TTM', ''))
+# write.csv('Marketing/Data-Output/Visualizations/Vendors-TTM.csv', row.names = F, na = '')
+
+
+vendorPercentChange |> 
+  ggplot(aes(x = EXPENSE,
+             y = VENDOR,
+             color = VENDOR,
+             fill = VENDOR
+             )) + 
+  
+  # Labels
+  labs(title    = 'Percentage Increase in Vendor Expenditures\n',
+       subtitle = 'Trailing Twelve Months (TTM) vs. Prior TTM\n',
+       x        = '\nPercentage Increase from Prior TTM',
+       y        = 'Advertising\nVendor\n',
+       caption  = paste0('\nSource: Great Plains Vendor Detail.\nGL Accounts included: ', 
+                         paste(sort(unique(gcpe_filtered$ACCOUNT)), collapse = ', '), '.')
+  ) +  
+  
+  # Build a lollipop chart
+  geom_segment(aes(x = 0, 
+                   xend = EXPENSE, 
+                   y    = VENDOR, 
+                   yend = VENDOR
+                   ),
+               alpha = 0.5,
+               linewidth  = 1) +
+  
+  geom_point(alpha = 0.9,
+             size  = 3.5) +
+  
+  
+  # Add data labels to the right of the points
+  geom_text(aes(label = paste0(VENDOR, '\n+', percent(EXPENSE)), 
+                x = EXPENSE), 
+            hjust = 0, 
+            vjust = 0.5,
+            nudge_x = 0.04,
+            size = 3,
+            family = 'Times'
+            ) +
+  
+  
+  scale_x_continuous(label = percent) + 
+  scale_fill_cmac() +
+  scale_color_cmac() +
+  theme_cmac(inTimesNewRoman = T) +
+  theme(legend.position = 'none')+
+  expand_limits(x = 1.10) # Adjust the number of days added according to your date range and requirements
+
+
+
+exportToPNG(cowplot::plot_grid(last_plot()), 
+            outputFileName = 'Marketing/Visualizations/Vendor-Growth-YoY',
+            outHeight = 650,
+            outWidth = 1600,
+            outResolution = 160,
+            SCALED_BY = 4
+)
+  
+

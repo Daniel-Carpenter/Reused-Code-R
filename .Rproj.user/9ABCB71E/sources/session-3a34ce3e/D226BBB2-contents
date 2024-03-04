@@ -1,0 +1,20 @@
+# GOAL: 
+#   1. Read Library, and 
+#   2. Read reusable functions, and  
+#
+# Author: Daniel Carpenter
+
+
+# Packages
+if (!require('purrr'))     install.packages('purrr') 
+if (!require('grDevices')) install.packages('grDevices')     
+
+# Load files/packages in the reusable code directory
+filesToSource <- list.files('..//Reused-Code-R//', full.names = TRUE)
+
+# Don't include this R script
+indices_to_remove <- grep('Read-Data-and-Library.R', filesToSource)
+filesToSource <- filesToSource[-indices_to_remove]
+
+numFilesLoaded <- length(try(map(filesToSource, source))
+)
