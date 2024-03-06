@@ -4,7 +4,7 @@ library(scales)
 kDollarsFormat <- function(x, scaleUnit = 'M',
                            useDollarSign = TRUE,
                            roundToDigit = 1
-                              ) {
+                           ) {
   
   # List of possible formats
   formatTypes <- list(

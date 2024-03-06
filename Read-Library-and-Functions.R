@@ -6,7 +6,7 @@
 
 
 # INPUT - Location of this folder
-reusedCodeDir <- '../Reused-Code-R/'
+reusedCodeDir <- 'Reused-Code-R/'
 
 # Packages
 if (!require('purrr'))     install.packages('purrr') 
@@ -17,7 +17,7 @@ if (!require('grDevices')) install.packages('grDevices')
 filesToSource <- list.files(reusedCodeDir, pattern = '\\.[Rr]$', full.names = TRUE)
 
 # Don't include this R script
-indices_to_remove <- grep('Read-Data-and-Library.R', filesToSource)
+indices_to_remove <- grep('Read-Library-and-Functions.R', filesToSource)
 filesToSource <- filesToSource[-indices_to_remove]
 
 # Source files
