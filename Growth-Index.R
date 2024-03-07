@@ -5,7 +5,7 @@ library(tidyverse)
 
 indexGrowth <- function(df, dateCol, 
                         groupingCols = NULL, # set to a vector of the grouping columns, if in long format
-                        isDateCol = TRUE
+                        isDateCol    = TRUE # TRUE if using date column for ID, else not date type.
 ) {
   
   if (isDateCol) {
@@ -21,12 +21,13 @@ indexGrowth <- function(df, dateCol,
     
     # Group data so that nothing needs to get moved
     # ONLY NEEDED IF DATA IS IN LONG FORMAT!
-    group_by(across(groupingCols)) |> 
+    group_by(across(all_of(groupingCols))) |> 
+    arrange( across(all_of(groupingCols))) |> 
     
     # Index each value relative to the first, for each column
     mutate(across(where(is.numeric), ~(. / first(.)) * 100))
   
-  # write.csv(cbind(df, df_index), 'indexCalcs.csv')
+  # write.csv(cbind(df, df_index), 'forValidation.csv')
   
   return(df_index)
 }
@@ -45,7 +46,8 @@ indexGrowth <- function(df, dateCol,
 # )
 # 
 # ## Index in wide format
-# df_index <- indexGrowth(df, dateCol = 'id') 
+# df_index <- indexGrowth(df, dateCol = 'id', 
+#                         isDateCol = FALSE) # False since not using Date index
 # 
 # # Example 2: Long format
 # 
@@ -58,7 +60,8 @@ indexGrowth <- function(df, dateCol,
 #                values_to = 'value')
 # 
 # ## Index in long format
-# df_indexFromLong <- indexGrowth(df_long, 
+# df_indexFromLong <- indexGrowth(df_long,
 #                                 dateCol = 'id',
-#                                 groupingCols = metricGroupingColName
-#                                 ) 
+#                                 groupingCols = metricGroupingColName, 
+#                                 isDateCol = FALSE # False since not using Date index
+#                                 )
